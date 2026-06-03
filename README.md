@@ -1,0 +1,54 @@
+# Free Classrooms Bot - UNITN
+
+Modern Go implementation of the UNITN classroom availability Telegram bot.
+
+## Layout
+
+- `cmd/locuspocusbot`: executable entrypoint
+- `internal/bot`: bot app, config, MongoDB logging, EasyAcademy room loading, rendering, and tests
+- root files: module, Docker, compose, Makefile, example config
+
+## Features
+
+- Telegram long polling with `gopkg.in/telebot.v3`
+- `/start`, `/aiuto`, and department commands
+- group/supergroup startup messages when the bot is added
+- EasyAcademy room loading and department-specific room-name filtering
+- free/occupied/all room grouping with inline callback buttons
+- MongoDB `chats` and `logs` collections
+- hourly room refresh
+- quiet Docker logging defaults
+
+## Run
+
+```sh
+cp example.env .env
+docker compose up --build
+```
+
+Config supports `appsettings.json` plus env overrides:
+
+- `Bot__BotToken`
+- `Bot__BotName`
+- `Database__ConnectionString`
+- `Logging__LogLevel__Default`
+
+## Author
+
+@kirbychan on Telegram
+
+## Verify
+
+```sh
+GOCACHE=/tmp/go-cache GOMODCACHE=/tmp/go-mod go test ./...
+GOCACHE=/tmp/go-cache GOMODCACHE=/tmp/go-mod go test -race ./...
+GOCACHE=/tmp/go-cache GOMODCACHE=/tmp/go-mod go vet ./...
+GOCACHE=/tmp/go-cache GOMODCACHE=/tmp/go-mod go build -o bin/free-classrooms-bot ./cmd/locuspocusbot
+docker build --network=host .
+```
+
+Equivalent shortcuts:
+
+```sh
+make test race vet docker compose-config
+```

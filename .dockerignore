@@ -1,0 +1,7 @@
+.git
+.env
+free-classrooms-bot
+locuspocusbot
+bin/
+*.test
+coverage.out

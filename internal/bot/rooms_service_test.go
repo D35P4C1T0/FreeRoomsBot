@@ -232,6 +232,13 @@ func TestParseClockAcceptsMidnight24(t *testing.T) {
 	}
 }
 
+func TestParseClockAcceptsSeconds(t *testing.T) {
+	hour, minute := parseClock("08:30:00")
+	if hour != 8 || minute != 30 {
+		t.Fatalf("parseClock(08:30:00) = %02d:%02d, want 08:30", hour, minute)
+	}
+}
+
 func TestParseLecturesMapsMidnight24To2359(t *testing.T) {
 	loc, err := time.LoadLocation("Europe/Rome")
 	if err != nil {
@@ -257,5 +264,34 @@ func TestParseLecturesMapsMidnight24To2359(t *testing.T) {
 	end := rooms[0].Lectures[0].End.In(loc)
 	if end.Hour() != 23 || end.Minute() != 59 {
 		t.Fatalf("lecture end = %02d:%02d, want 23:59", end.Hour(), end.Minute())
+	}
+}
+
+func TestParseLecturesAcceptsEasyRoomClockWithSeconds(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Rome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &RoomsService{loc: loc}
+	rooms := []*Room{{Key: "E0503/A101", Name: "A101"}}
+	payload := easyRoomPayload{
+		Events: []struct {
+			Name       string `json:"name"`
+			From       string `json:"from"`
+			To         string `json:"to"`
+			CodiceAula string `json:"CodiceAula"`
+		}{
+			{Name: "Lecture", From: "08:30:00", To: "10:30:00", CodiceAula: "E0503/A101"},
+		},
+	}
+
+	service.parseLectures(payload, rooms, time.Date(2026, 6, 3, 12, 0, 0, 0, loc))
+	if len(rooms[0].Lectures) != 1 {
+		t.Fatalf("lectures = %d, want 1", len(rooms[0].Lectures))
+	}
+	start := rooms[0].Lectures[0].Start.In(loc)
+	end := rooms[0].Lectures[0].End.In(loc)
+	if start.Hour() != 8 || start.Minute() != 30 || end.Hour() != 10 || end.Minute() != 30 {
+		t.Fatalf("lecture interval = %02d:%02d-%02d:%02d, want 08:30-10:30", start.Hour(), start.Minute(), end.Hour(), end.Minute())
 	}
 }

@@ -273,7 +273,7 @@ func parseClock(value string) (int, int) {
 	// Invalid upstream clock values fall back to midnight rather than failing
 	// the whole refresh, matching the bot's best-effort refresh behavior.
 	parts := strings.Split(value, ":")
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		return 0, 0
 	}
 	hour, err := strconv.Atoi(parts[0])

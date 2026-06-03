@@ -33,6 +33,7 @@ func TestLoadConfigReadsAppsettingsAndEnvOverrides(t *testing.T) {
 	t.Setenv("Bot__BotToken", "from-env")
 	t.Setenv("Bot__BotName", "FromEnv")
 	t.Setenv("Database__ConnectionString", "mongodb://env:27017")
+	t.Setenv("Health__Port", "9090")
 	t.Setenv("Logging__LogLevel__Default", "Warning")
 
 	cfg, err := LoadConfig()
@@ -47,6 +48,9 @@ func TestLoadConfigReadsAppsettingsAndEnvOverrides(t *testing.T) {
 	}
 	if cfg.Database.ConnectionString != "mongodb://env:27017" {
 		t.Fatalf("ConnectionString = %q, want env value", cfg.Database.ConnectionString)
+	}
+	if cfg.Health.Port != 9090 {
+		t.Fatalf("Health.Port = %d, want 9090", cfg.Health.Port)
 	}
 	if cfg.Logging.LogLevel["Default"] != "Warning" {
 		t.Fatalf("Default log level = %q, want Warning", cfg.Logging.LogLevel["Default"])
@@ -100,5 +104,29 @@ func TestLoadConfigRequiresBotToken(t *testing.T) {
 	_, err = LoadConfig()
 	if err == nil {
 		t.Fatal("LoadConfig succeeded without BotToken")
+	}
+}
+
+func TestLoadConfigRejectsInvalidHealthPort(t *testing.T) {
+	t.Setenv("Bot__BotToken", "token")
+	t.Setenv("Health__Port", "70000")
+
+	tmp := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = LoadConfig()
+	if err == nil {
+		t.Fatal("LoadConfig succeeded with invalid health port")
 	}
 }

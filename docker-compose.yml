@@ -1,5 +1,11 @@
 name: free-classrooms-bot-unitn
 
+x-log-rotation: &log-rotation
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   free-classrooms-bot:
     build: .
@@ -12,11 +18,11 @@ services:
     environment:
       - Database__ConnectionString=mongodb://mongo:27017
       - Bot__BotName=Free Classrooms Bot - UNITN
+      - Health__Port=8080
       - Logging__LogLevel__Default=Warning
       - Logging__LogLevel__Microsoft=Warning
       - Logging__LogLevel__System.Net.Http.HttpClient=Warning
-    volumes:
-      - ./logs:/app/logs
+    logging: *log-rotation
     mem_limit: 512m
     cpus: '2'
 
@@ -24,6 +30,7 @@ services:
     image: mongo:6.0
     command: ["--quiet"]
     restart: unless-stopped
+    logging: *log-rotation
     volumes:
       - mongo-data:/data/db
 

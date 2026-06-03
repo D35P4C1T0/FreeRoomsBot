@@ -31,7 +31,12 @@ Config supports `appsettings.json` plus env overrides:
 - `Bot__BotToken`
 - `Bot__BotName`
 - `Database__ConnectionString`
+- `Health__Port`
 - `Logging__LogLevel__Default`
+
+The Docker Compose configuration sets the bot log level to `Warning` and
+enables Docker log rotation at 10 MB per file with 3 retained files per
+container.
 
 ## Author
 

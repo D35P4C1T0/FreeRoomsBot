@@ -52,7 +52,7 @@ func NewApp(ctx context.Context, cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := NewDatabaseService(ctx, cfg.Database.ConnectionString)
+	db, err := NewDatabaseService(ctx, cfg.Database.ConnectionString, time.Duration(cfg.Database.LogRetentionDays)*24*time.Hour)
 	if err != nil {
 		return nil, err
 	}

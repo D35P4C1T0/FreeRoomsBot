@@ -64,7 +64,7 @@ const databaseName = "free_classrooms_bot_unitn"
 // The supplied context is bounded by an internal startup timeout. If pinging or
 // index creation fails, the partially opened client is disconnected before the
 // error is returned.
-func NewDatabaseService(ctx context.Context, connectionString string) (*DatabaseService, error) {
+func NewDatabaseService(ctx context.Context, connectionString string, logRetention time.Duration) (*DatabaseService, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -83,22 +83,39 @@ func NewDatabaseService(ctx context.Context, connectionString string) (*Database
 		chats:  db.Collection("chats"),
 		logs:   db.Collection("logs"),
 	}
-	if err := service.ensureIndexes(connectCtx); err != nil {
+	if err := service.ensureIndexes(connectCtx, logRetention); err != nil {
 		_ = client.Disconnect(context.Background())
 		return nil, err
 	}
 	return service, nil
 }
 
-func (d *DatabaseService) ensureIndexes(ctx context.Context) error {
+func (d *DatabaseService) ensureIndexes(ctx context.Context, logRetention time.Duration) error {
+	retentionSeconds := int32(logRetention / time.Second)
 	if _, err := d.chats.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "ChatId", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
 		return err
 	}
+	// Older releases created the same index without expiry. Remove it before
+	// creating the TTL index so existing deployments gain bounded retention.
+	indexes, err := d.logs.Indexes().ListSpecifications(ctx)
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		if index.Name == "At_-1" && (index.ExpireAfterSeconds == nil || *index.ExpireAfterSeconds != retentionSeconds) {
+			if _, err := d.logs.Indexes().DropOne(ctx, index.Name); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := d.logs.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "At", Value: -1}},
+		Options: options.Index().
+			SetName("At_-1").
+			SetExpireAfterSeconds(retentionSeconds),
 	}); err != nil {
 		return err
 	}

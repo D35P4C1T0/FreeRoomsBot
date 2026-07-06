@@ -31,12 +31,19 @@ Config supports `appsettings.json` plus env overrides:
 - `Bot__BotToken`
 - `Bot__BotName`
 - `Database__ConnectionString`
+- `Database__LogRetentionDays` (default: `90`; MongoDB TTL expiry for usage logs)
+
+With Docker Compose, set `LOG_RETENTION_DAYS` in `.env` to override retention.
 - `Health__Port`
 - `Logging__LogLevel__Default`
 
 The Docker Compose configuration sets the bot log level to `Warning` and
 enables Docker log rotation at 10 MB per file with 3 retained files per
 container.
+
+MongoDB usage logs expire after 90 days by default. MongoDB reuses freed
+WiredTiger space internally; expiry bounds future growth but does not
+immediately shrink an already enlarged volume.
 
 ## Author
 

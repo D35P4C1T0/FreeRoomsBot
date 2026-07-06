@@ -33,6 +33,7 @@ func TestLoadConfigReadsAppsettingsAndEnvOverrides(t *testing.T) {
 	t.Setenv("Bot__BotToken", "from-env")
 	t.Setenv("Bot__BotName", "FromEnv")
 	t.Setenv("Database__ConnectionString", "mongodb://env:27017")
+	t.Setenv("Database__LogRetentionDays", "30")
 	t.Setenv("Health__Port", "9090")
 	t.Setenv("Logging__LogLevel__Default", "Warning")
 
@@ -48,6 +49,9 @@ func TestLoadConfigReadsAppsettingsAndEnvOverrides(t *testing.T) {
 	}
 	if cfg.Database.ConnectionString != "mongodb://env:27017" {
 		t.Fatalf("ConnectionString = %q, want env value", cfg.Database.ConnectionString)
+	}
+	if cfg.Database.LogRetentionDays != 30 {
+		t.Fatalf("LogRetentionDays = %d, want 30", cfg.Database.LogRetentionDays)
 	}
 	if cfg.Health.Port != 9090 {
 		t.Fatalf("Health.Port = %d, want 9090", cfg.Health.Port)

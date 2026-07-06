@@ -17,6 +17,7 @@ services:
         required: false
     environment:
       - Database__ConnectionString=mongodb://mongo:27017
+      - Database__LogRetentionDays=${LOG_RETENTION_DAYS:-90}
       - Bot__BotName=Free Classrooms Bot - UNITN
       - Health__Port=8080
       - Logging__LogLevel__Default=Warning

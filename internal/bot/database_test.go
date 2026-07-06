@@ -63,3 +63,16 @@ func TestEmptyStringToNil(t *testing.T) {
 		t.Fatalf("emptyStringToNil(non-empty) = %#v, want string", got)
 	}
 }
+
+func TestDefaultLogRetention(t *testing.T) {
+	t.Setenv("Bot__BotToken", "token")
+	t.Setenv("APPSETTINGS_PATH", t.TempDir()+"/missing.json")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.LogRetentionDays != 90 {
+		t.Fatalf("LogRetentionDays = %d, want 90", cfg.Database.LogRetentionDays)
+	}
+}

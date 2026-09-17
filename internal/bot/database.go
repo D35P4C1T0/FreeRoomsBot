@@ -16,12 +16,12 @@ import (
 // A DatabaseService owns its mongo.Client and must be closed when the
 // application shuts down.
 type DatabaseService struct {
-	client  *mongo.Client
-	chats   *mongo.Collection
-	logs    *mongo.Collection
-	usage   *mongo.Collection
-	logGate *interactionGate
-	logger  *slog.Logger
+	client    *mongo.Client
+	chats     *mongo.Collection
+	logs      *mongo.Collection
+	usage     *mongo.Collection
+	retention time.Duration
+	logger    *slog.Logger
 }
 
 // ChatEntity is the MongoDB representation of a Telegram chat or private user.
@@ -71,10 +71,8 @@ const databaseName = "free_classrooms_bot_unitn"
 // indexes required by the bot.
 //
 // The supplied context is bounded by an internal startup timeout. If pinging
-// fails, the partially opened client is disconnected before the error is
-// returned. Index failures are logged as warnings and do not prevent startup:
-// the bot runs correctly without them, so a deploy can never crash-loop over
-// index state on an existing database. A nil logger falls back to slog.Default.
+// or usage retention setup fails, the client is disconnected before returning.
+// Other index failures are logged. A nil logger falls back to slog.Default.
 func NewDatabaseService(ctx context.Context, connectionString string, logRetention time.Duration, logger *slog.Logger) (*DatabaseService, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -93,23 +91,32 @@ func NewDatabaseService(ctx context.Context, connectionString string, logRetenti
 
 	db := client.Database(databaseName)
 	service := &DatabaseService{
-		client:  client,
-		chats:   db.Collection("chats"),
-		logs:    db.Collection("logs"),
-		usage:   db.Collection("usage"),
-		logGate: newInteractionGate(time.Second),
-		logger:  logger,
+		client:    client,
+		chats:     db.Collection("chats"),
+		logs:      db.Collection("logs"),
+		usage:     db.Collection("usage"),
+		retention: logRetention,
+		logger:    logger,
 	}
 	service.ensureIndexes(connectCtx, logRetention)
+	if err := service.prepareUsage(connectCtx); err != nil {
+		_ = client.Disconnect(context.Background())
+		return nil, err
+	}
 	return service, nil
 }
 
 // ensureIndexes creates or refreshes the indexes used by the bot.
 //
-// Every failure is logged and swallowed: indexes only affect query efficiency,
-// race-safety of bucket upserts, and TTL expiry, none of which justify a
-// crash loop on an existing deployment.
+// Legacy index setup failures are logged; mandatory usage retention setup is
+// handled separately by prepareUsage.
 func (d *DatabaseService) ensureIndexes(ctx context.Context, logRetention time.Duration) {
+	if _, err := d.usage.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "LastSeen", Value: -1}, {Key: "_id", Value: 1}},
+	}); err != nil {
+		d.logger.Warn("usage recency index creation failed", "error", err)
+	}
+
 	if _, err := d.usage.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "TotalInteractions", Value: -1}},
 		Options: options.Index().SetName("TotalInteractions_-1"),
@@ -265,13 +272,9 @@ func chatTypeString(chatType tele.ChatType) string {
 // created per chat per hour regardless of request volume. Count accumulates
 // the request total per bucket.
 //
-// A per-chat interaction gate additionally throttles the writes themselves,
-// collapsing sub-second request storms into at most one write per second per
-// chat. The database operation has its own short timeout derived from ctx.
+// Every successful call increments the bucket, including sub-second bursts.
+// The database operation has its own short timeout derived from ctx.
 func (d *DatabaseService) LogUsage(ctx context.Context, chatID int64, requestType RequestType, availabilityType AvailabilityType, dep *Department) error {
-	if !d.logGate.Allow(chatID) {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -283,7 +286,7 @@ func (d *DatabaseService) LogUsage(ctx context.Context, chatID int64, requestTyp
 		"Department":       dep.Slug,
 		"AvailabilityType": availabilityType,
 		// Matching on Count excludes legacy per-request documents, which keeps
-		// the sparse unique bucket index free of pre-existing data.
+		// the partial unique bucket index free of pre-existing data.
 		"Count": bson.M{"$exists": true},
 	}
 	update := bson.M{"$inc": bson.M{"Count": 1}}

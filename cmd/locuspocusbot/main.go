@@ -29,6 +29,17 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "usage" {
+		query := ""
+		if len(os.Args) > 2 {
+			query = os.Args[2]
+		}
+		if err := bot.ExportUsage(context.Background(), cfg.Health.Port, query, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

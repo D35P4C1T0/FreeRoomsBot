@@ -298,8 +298,8 @@ func (a *App) recordUsageInteraction(ctx context.Context, user *tele.User, chat 
 	a.recordInteraction(ctx, chatInfo)
 }
 
-// recordInteraction logs a usage interaction, ignoring failures so usage
-// tracking never blocks a user-facing response.
+// recordInteraction logs usage before responding. Failures are logged and do
+// not prevent the response; the database call has a five-second timeout.
 func (a *App) recordInteraction(ctx context.Context, primary UsageChat, extras ...UsageChat) {
 	if err := a.db.RecordInteraction(ctx, primary, extras...); err != nil {
 		a.logger.Warn("record interaction failed", "error", err)

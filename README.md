@@ -47,37 +47,60 @@ MongoDB usage logs expire after 90 days by default. MongoDB reuses freed
 WiredTiger space internally; expiry bounds future growth but does not
 immediately shrink an already enlarged volume.
 
-## Flood safety
+## Usage storage
 
-Storage and write volume stay bounded even under heavy request floods (for
-example abusive automation against the bot):
+Request logs use one bucket per chat, UTC hour, department, availability view,
+and request type. Every successful write increments `Count`, including bursts.
+There is no write-rate throttle: database work scales with incoming requests.
 
-- usage logs are aggregated into one document per chat, UTC hour, department,
-  availability view, and request type (`Count` field), so a request storm
-  cannot create unbounded documents — at most a few dozen buckets per chat per
-  hour regardless of volume;
-- a per-chat interaction gate throttles log-bucket writes to at most one write
-  per second per chat, collapsing sub-second bursts;
-- per-user usage statistics stay exact and bounded by the number of distinct
-  Telegram users (their Telegram IDs are never stored), and every write is a
-  cheap indexed upsert;
-- incoming request volume is additionally bounded by Telegram's own rate
-  limits, and all collections are TTL-expired.
+`Database__LogRetentionDays` (default 90) controls log expiry, retained daily
+usage history, retained chat associations, and expiry of inactive usage users.
+Active users keep lifetime interaction totals and first-seen dates; daily/chat
+history is pruned atomically on each interaction and at startup for legacy data.
+Inactive usage users expire after the configured interval. MongoDB TTL deletion
+is asynchronous; the dashboard excludes expired users immediately. The existing
+`chats` metadata collection is not TTL-expired. Usage retention setup failures
+stop startup rather than silently disabling expiry.
 
-## Usage dashboard
+Usage IDs are stable hashes, not anonymous identities: someone who knows a
+Telegram ID can compute its hash. Group titles are retained; private-user names
+are not stored in `usage`. Existing `chats` and `logs` still contain Telegram IDs.
 
-A minimal, read-only admin dashboard is served at `/usage` on the health
-server. It binds to `127.0.0.1` only and Docker Compose publishes no ports, so
-it is never reachable from the network. To view it from the host, open a local
-tunnel into the container (for example
-`docker run --rm -it --network container:free-classrooms-bot-unitn-free-classrooms-bot-1 alpine/socat tcp-listen:8081,fork,reuseaddr tcp:127.0.0.1:8080`
-and browse `http://127.0.0.1:8081/usage`) or run the binary locally against
-the same MongoDB instance.
+## Private usage dashboard (Docker inside Ubuntu LXC)
 
-For each user it shows a pseudonymous internal ID (Telegram IDs are never
-stored there), total interactions, first/last usage, a usage-frequency
-classification (frequent / occasional / rare), the last 14 days of activity,
-and the chats the user interacted from.
+`/usage` binds **only to 127.0.0.1 inside the bot container**. Compose publishes
+no ports. Do not add a port mapping, host networking, public reverse proxy, or
+change the listener to `0.0.0.0`. The LXC IP cannot reach this endpoint directly.
+The handler also rejects non-loopback peers and non-local Host headers. Docker
+administrators and processes sharing the container network namespace can access
+it; loopback isolation is not authentication against those administrators.
+
+The dashboard uses server-rendered HTML with no JavaScript, CDN, fonts, or other
+network dependencies. It includes global summary cards, 30-day activity counts,
+ID-prefix search, sorting, 50-user pages, and expandable chat details. Frequency
+uses active days in the last 30 UTC days (frequent ≥12, occasional ≥4, rare ≥1).
+Summary cards include all retained users regardless of the current filter/page.
+
+To view it without exposing any HTTP listener, export a private HTML snapshot.
+From your workstation, use your existing SSH access to the Ubuntu LXC:
+
+```sh
+# Replace host and directory with your LXC SSH host and Compose project path.
+# The shell redirection saves the file on your workstation, not the server.
+(umask 077; ssh user@lxc-host 'cd /path/to/FreeRoomsBot && docker compose exec -T free-classrooms-bot /app/free-classrooms-bot usage' > usage.html)
+```
+
+Open `usage.html` locally in your browser. Charts and expandable details work
+offline. Search, sorting, and pagination need a new export with query parameters:
+
+```sh
+(umask 077; ssh user@lxc-host 'cd /path/to/FreeRoomsBot && docker compose exec -T free-classrooms-bot /app/free-classrooms-bot usage "sort=total&page=2"' > usage.html)
+```
+
+Use `q=a3f0` for an internal-ID prefix, and `sort=recent`, `sort=total`, or
+`sort=first`. Export reads the running bot's local HTTP endpoint; it does not
+start another bot or server. Treat the exported file as private admin data.
+No socat sidecar, published port, or public dashboard is needed.
 
 ## Author
 

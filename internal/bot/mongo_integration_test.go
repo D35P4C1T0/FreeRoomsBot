@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"os"
@@ -125,7 +126,7 @@ func TestIntegrationLegacyMigration(t *testing.T) {
 }
 
 // TestIntegrationConcurrentFlood hammers the same chat with concurrent
-// identical requests while the gate is disabled, forcing the duplicate-key
+// identical requests, forcing the duplicate-key
 // retry paths, and verifies the bucket count stays exact.
 func TestIntegrationConcurrentFlood(t *testing.T) {
 	client := testIntegrationDB(t)
@@ -136,9 +137,6 @@ func TestIntegrationConcurrentFlood(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer svc.Close(context.Background())
-	// Disable the per-chat gate so the concurrent requests all reach MongoDB
-	// and race on the same bucket document.
-	svc.logGate = newInteractionGate(0)
 
 	const goroutines = 50
 	var wg sync.WaitGroup
@@ -215,7 +213,7 @@ func TestIntegrationViewerEndToEnd(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	newUsageViewerHandler(svc).ServeHTTP(rec, httptest.NewRequest("GET", "/usage", nil))
+	newUsageViewerHandler(svc).ServeHTTP(rec, localUsageRequest("GET", "/usage"))
 	if rec.Code != 200 {
 		t.Fatalf("viewer status = %d, want 200", rec.Code)
 	}
@@ -232,4 +230,91 @@ func mustEnv(t *testing.T, key string) string {
 		t.Fatalf("%s must be set", key)
 	}
 	return v
+}
+
+func TestIntegrationUsageRetentionAndPagination(t *testing.T) {
+	client := testIntegrationDB(t)
+	ctx := context.Background()
+	usage := client.Database(databaseName).Collection("usage")
+	now := time.Now().UTC()
+	old := now.Add(-120 * 24 * time.Hour)
+	id := pseudonymousUsageID(101)
+	_, err := usage.InsertMany(ctx, []interface{}{
+		UsageEntity{ID: id, FirstSeen: old, LastSeen: now, TotalInteractions: 10, Days: map[string]int64{old.Format(usageDayLayout): 9, now.Format(usageDayLayout): 1}, Chats: map[string]UsageChatRef{"old": {LastAt: old}, "current": {LastAt: now, Title: "$literal title"}}},
+		UsageEntity{ID: "expired", FirstSeen: old, LastSeen: old, TotalInteractions: 500},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewDatabaseService(ctx, mustEnv(t, "MONGO_TEST_URI"), 90*24*time.Hour, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close(ctx)
+	var migrated UsageEntity
+	if err := usage.FindOne(ctx, bson.M{"_id": id}).Decode(&migrated); err != nil {
+		t.Fatal(err)
+	}
+	if len(migrated.Days) != 1 || len(migrated.Chats) != 1 || migrated.TotalInteractions != 10 {
+		t.Fatalf("bad migration: %#v", migrated)
+	}
+	var expiry struct {
+		ExpiresAt time.Time `bson:"ExpiresAt"`
+	}
+	if err := usage.FindOne(ctx, bson.M{"_id": id}).Decode(&expiry); err != nil {
+		t.Fatal(err)
+	}
+	if expiry.ExpiresAt.Sub(now.Add(90*24*time.Hour)) > time.Second || expiry.ExpiresAt.Before(now.Add(90*24*time.Hour-time.Second)) {
+		t.Fatalf("bad expiry %v", expiry.ExpiresAt)
+	}
+	// Old history added after startup must also be pruned on interaction.
+	if _, err := usage.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"Days." + old.Format(usageDayLayout): 9, "Chats.old": UsageChatRef{LastAt: old}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordInteraction(ctx, UsageChat{ID: 101, Type: "Private"}, UsageChat{ID: -12, Type: "Group", Title: "$secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := usage.FindOne(ctx, bson.M{"_id": id}).Decode(&migrated); err != nil {
+		t.Fatal(err)
+	}
+	if len(migrated.Days) != 1 || len(migrated.Chats) != 3 || migrated.TotalInteractions != 11 || migrated.Days[now.Format(usageDayLayout)] != 2 || migrated.Chats[pseudonymousUsageID(-12)].Title != "$secret" {
+		t.Fatalf("bad atomic update: %#v", migrated)
+	}
+	docs := make([]interface{}, 510)
+	for i := range docs {
+		docs[i] = UsageEntity{ID: fmt.Sprintf("%016x", i), FirstSeen: now, LastSeen: now, TotalInteractions: 1, Days: map[string]int64{now.Format(usageDayLayout): 1}}
+	}
+	if _, err := usage.InsertMany(ctx, docs); err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.usageDashboard(ctx, usageQuery{sort: "total", page: 1}, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Summary.Users != 511 || page.Summary.Interactions != 521 || page.Summary.Today != 511 || len(page.Rows) != 50 || page.Next == "" {
+		t.Fatalf("wrong global totals/pagination: %+v, rows %d", page.Summary, len(page.Rows))
+	}
+	if page.Bars[29].Count != 512 {
+		t.Fatalf("daily total %d", page.Bars[29].Count)
+	}
+	filtered, err := svc.usageDashboard(ctx, usageQuery{search: id, sort: "recent", page: 1}, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Rows) != 1 || filtered.Summary != page.Summary {
+		t.Fatal("filter altered global summary")
+	}
+	indexes, err := usage.Indexes().ListSpecifications(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, index := range indexes {
+		if index.Name == "ExpiresAt_1" && index.ExpireAfterSeconds != nil && *index.ExpireAfterSeconds == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing usage TTL")
+	}
 }

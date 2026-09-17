@@ -1,55 +1,18 @@
 package bot
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
-
-func TestInteractionGateSuppressesBursts(t *testing.T) {
-	gate := newInteractionGate(50 * time.Millisecond)
-
-	if !gate.Allow(1) {
-		t.Fatal("first call for key 1 must be allowed")
-	}
-	for i := 0; i < 20; i++ {
-		if gate.Allow(1) {
-			t.Fatalf("call %d within the gap must be suppressed", i)
-		}
-	}
-	if !gate.Allow(2) {
-		t.Fatal("a different key must be allowed while key 1 is suppressed")
-	}
-	time.Sleep(60 * time.Millisecond)
-	if !gate.Allow(1) {
-		t.Fatal("key 1 must be allowed again after the gap")
-	}
-}
-
-func TestInteractionGateStaysBounded(t *testing.T) {
-	gate := newInteractionGate(time.Hour)
-
-	allowed := 0
-	for i := int64(1); i <= 10000; i++ {
-		if gate.Allow(i) {
-			allowed++
-		}
-	}
-	if allowed != 10000 {
-		t.Fatalf("distinct keys must all be allowed, got %d", allowed)
-	}
-	gate.mu.Lock()
-	size := len(gate.last)
-	gate.mu.Unlock()
-	if size > 8192 {
-		t.Fatalf("gate map grew to %d entries, want bounded at 8192", size)
-	}
-}
 
 func TestPseudonymousUsageIDIsStableAndUnique(t *testing.T) {
 	first := pseudonymousUsageID(42)
@@ -107,91 +70,110 @@ func entityLastAt() time.Time {
 	return time.Date(2026, 6, 3, 9, 30, 0, 0, time.UTC)
 }
 
-func TestUsageFrequencyClass(t *testing.T) {
-	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
-	first := now.AddDate(0, 0, -30)
+func localUsageRequest(method, path string) *http.Request {
+	r := httptest.NewRequest(method, "http://127.0.0.1:8080"+path, nil)
+	r.RemoteAddr = "127.0.0.1:54321"
+	return r
+}
 
+func TestRecentFrequency(t *testing.T) {
+	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	days := map[string]int64{now.AddDate(0, 0, -60).Format(usageDayLayout): 100}
+	if got := recentFrequency(days, now); got != "inactive" {
+		t.Fatal(got)
+	}
+	days[now.Format(usageDayLayout)] = 100
+	if got := recentFrequency(days, now); got != "rare" {
+		t.Fatal(got)
+	}
+	for i := 1; i < 12; i++ {
+		days[now.AddDate(0, 0, -i).Format(usageDayLayout)] = 1
+	}
+	if got := recentFrequency(days, now); got != "frequent" {
+		t.Fatal(got)
+	}
+}
+
+func TestUsageViewerSecurity(t *testing.T) {
+	handler := newUsageViewerHandler(nil)
 	tests := []struct {
-		name  string
-		total int64
-		first time.Time
-		last  time.Time
-		want  string
+		name, method, host, peer, path string
+		status                         int
 	}{
-		{name: "none", total: 0, first: first, last: now, want: "none"},
-		{name: "rare", total: 2, first: first, last: now, want: "rare"},
-		{name: "occasional", total: 8, first: first, last: now, want: "occasional"},
-		{name: "frequent", total: 60, first: first, last: now, want: "frequent"},
-		{name: "single use is rare", total: 1, first: now, last: now, want: "rare"},
+		{"external peer", "GET", "127.0.0.1:8080", "192.0.2.1:4321", "/usage", 403},
+		{"rebinding host", "GET", "evil.example", "127.0.0.1:4321", "/usage", 403},
+		{"post", "POST", "127.0.0.1:8080", "127.0.0.1:4321", "/usage", 405},
+		{"query injection", "GET", "127.0.0.1:8080", "127.0.0.1:4321", "/usage?q=%24where", 400},
+		{"negative page", "GET", "127.0.0.1:8080", "127.0.0.1:4321", "/usage?page=-1", 400},
 	}
-
 	for _, tt := range tests {
-		if got := usageFrequencyClass(tt.total, tt.first, tt.last); got != tt.want {
-			t.Fatalf("%s: usageFrequencyClass = %q, want %q", tt.name, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			r := localUsageRequest(tt.method, tt.path)
+			r.Host = tt.host
+			r.RemoteAddr = tt.peer
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != tt.status {
+				t.Fatalf("got %d want %d", w.Code, tt.status)
+			}
+			if !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'none'") {
+				t.Fatal("missing CSP")
+			}
+		})
 	}
 }
 
-func TestUsageBars(t *testing.T) {
-	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
-
-	if got := usageBars(nil, now); got != "" {
-		t.Fatalf("usageBars(nil) = %q, want empty", got)
-	}
-	if got := usageBars(map[string]int64{"3000-01-01": 3}, now); got != strings.Repeat("·", 14) {
-		t.Fatalf("usageBars(future only) = %q, want 14 empty-day dots", got)
-	}
-
-	today := now.Format(usageDayLayout)
-	got := usageBars(map[string]int64{today: 2}, now)
-	want := strings.Repeat("·", 13) + "▂"
-	if got != want {
-		t.Fatalf("usageBars(today=2) = %q, want %q", got, want)
-	}
-}
-
-func TestRenderUsagePage(t *testing.T) {
-	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
-	users := []UsageEntity{{
-		ID:                "0123456789abcdef",
-		FirstSeen:         now.AddDate(0, 0, -10),
-		LastSeen:          now.Add(-time.Hour),
-		TotalInteractions: 11,
-		Days:              map[string]int64{now.Format(usageDayLayout): 1},
-		Chats: map[string]UsageChatRef{
-			"fedcba9876543210": {Type: "Group", Title: "Povo <test>", LastAt: now.Add(-time.Hour)},
-		},
-	}}
-
-	rec := httptest.NewRecorder()
-	if err := renderUsagePage(rec, users, now); err != nil {
+func TestUsageTemplateEscapesChatTitles(t *testing.T) {
+	var out strings.Builder
+	page := usagePage{Sort: "recent", Page: 1, Rows: []usageRow{{ID: "1234", Chats: []UsageChatRef{{Title: "<script>alert(1)</script>"}}}}}
+	if err := usageTemplate.Execute(&out, page); err != nil {
 		t.Fatal(err)
 	}
-
-	body := rec.Body.String()
-	for _, want := range []string{
-		"0123456789abcdef",
-		"users: <b>1</b>",
-		"interactions: <b>11</b>",
-		"active last 7 days: <b>1</b>",
-		"f-frequent",
-		"Povo &lt;test&gt;",
-		"2026-05-24",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("rendered page missing %q", want)
-		}
+	if strings.Contains(out.String(), "<script>") {
+		t.Fatal("unescaped script")
+	}
+	if !strings.Contains(out.String(), "&lt;script&gt;") {
+		t.Fatal("missing escaped title")
 	}
 }
 
-func TestUsageViewerHandlerRejectsUnsupportedMethods(t *testing.T) {
-	handler := newUsageViewerHandler(nil)
-	for _, method := range []string{"POST", "DELETE"} {
-		req := httptest.NewRequest(method, "/usage", nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("method %s returned status %d, want 405", method, rec.Code)
+func TestExportUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/usage" || r.URL.Query().Get("sort") != "total" || r.URL.Query().Get("page") != "2" {
+			t.Errorf("unexpected export URL %s", r.URL)
 		}
+		w.Write([]byte("<!doctype html><title>Private usage</title>"))
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := ExportUsage(context.Background(), port, "sort=total&page=2", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Private usage") {
+		t.Fatal("missing exported HTML")
+	}
+}
+
+func TestExportUsageRejectsRedirect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://example.com", http.StatusFound)
+	}))
+	defer server.Close()
+	parsed, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	var out strings.Builder
+	if err := ExportUsage(context.Background(), port, "", &out); err == nil {
+		t.Fatal("redirect accepted")
+	}
+	if out.Len() != 0 {
+		t.Fatal("error response exported")
 	}
 }

@@ -27,6 +27,9 @@ func StartHealthServer(ctx context.Context, port int, logger *slog.Logger, usage
 		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
 		Handler:           mux,
 		ReadHeaderTimeout: 2 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    8192,
 	}
 
 	listener, err := net.Listen("tcp", server.Addr)

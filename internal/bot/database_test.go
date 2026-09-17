@@ -34,6 +34,7 @@ func TestLogEntityBSONFieldNamesMatchCSharp(t *testing.T) {
 		RequestType:      RequestCallbackQuery,
 		Department:       "povo",
 		AvailabilityType: AvailabilityOccupied,
+		Count:            7,
 	}
 
 	raw, err := bson.Marshal(doc)
@@ -45,13 +46,21 @@ func TestLogEntityBSONFieldNamesMatchCSharp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, key := range []string{"ChatId", "At", "RequestType", "Department", "AvailabilityType"} {
+	for _, key := range []string{"ChatId", "At", "RequestType", "Department", "AvailabilityType", "Count"} {
 		if _, ok := out[key]; !ok {
 			t.Fatalf("missing BSON key %q in %#v", key, out)
 		}
 	}
 	if _, ok := out["chatId"]; ok {
 		t.Fatalf("found lower-case chatId key in %#v", out)
+	}
+}
+
+func TestLogUsageBucketsByHour(t *testing.T) {
+	at := time.Date(2026, 6, 3, 12, 34, 56, 789, time.UTC)
+	bucket := at.Truncate(time.Hour)
+	if bucket != time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC) {
+		t.Fatalf("bucket = %v, want the 12:00 UTC hour", bucket)
 	}
 }
 

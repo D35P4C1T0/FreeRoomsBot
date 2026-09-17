@@ -12,13 +12,20 @@ import (
 
 // StartHealthServer starts a localhost HTTP health endpoint.
 //
-// The server responds with HTTP 200 on /healthz until ctx is canceled. It binds
-// only to 127.0.0.1 because Docker runs the health-check command inside the
-// container network namespace.
-func StartHealthServer(ctx context.Context, port int, logger *slog.Logger) (*http.Server, error) {
+// The server responds with HTTP 200 on /healthz until ctx is canceled. When a
+// usage handler is supplied, it serves the read-only usage viewer at /usage.
+// It binds only to 127.0.0.1 because Docker runs the health-check command
+// inside the container network namespace, which also keeps the viewer off the
+// network.
+func StartHealthServer(ctx context.Context, port int, logger *slog.Logger, usageViewer http.Handler) (*http.Server, error) {
+	mux := http.NewServeMux()
+	if usageViewer != nil {
+		mux.Handle("/usage", usageViewer)
+	}
+	mux.Handle("/", newHealthHandler())
 	server := &http.Server{
 		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
-		Handler:           newHealthHandler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 

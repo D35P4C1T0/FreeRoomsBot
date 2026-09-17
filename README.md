@@ -16,6 +16,8 @@ Modern Go implementation of the UNITN classroom availability Telegram bot.
 - EasyAcademy room loading and department-specific room-name filtering
 - free/occupied/all room grouping with inline callback buttons
 - MongoDB `chats` and `logs` collections
+- pseudonymous per-user usage tracking in the MongoDB `usage` collection
+- local-only, read-only usage dashboard at `http://127.0.0.1:8080/usage`
 - hourly room refresh
 - quiet Docker logging defaults
 
@@ -44,6 +46,38 @@ container.
 MongoDB usage logs expire after 90 days by default. MongoDB reuses freed
 WiredTiger space internally; expiry bounds future growth but does not
 immediately shrink an already enlarged volume.
+
+## Flood safety
+
+Storage and write volume stay bounded even under heavy request floods (for
+example abusive automation against the bot):
+
+- usage logs are aggregated into one document per chat, UTC hour, department,
+  availability view, and request type (`Count` field), so a request storm
+  cannot create unbounded documents — at most a few dozen buckets per chat per
+  hour regardless of volume;
+- a per-chat interaction gate throttles log-bucket writes to at most one write
+  per second per chat, collapsing sub-second bursts;
+- per-user usage statistics stay exact and bounded by the number of distinct
+  Telegram users (their Telegram IDs are never stored), and every write is a
+  cheap indexed upsert;
+- incoming request volume is additionally bounded by Telegram's own rate
+  limits, and all collections are TTL-expired.
+
+## Usage dashboard
+
+A minimal, read-only admin dashboard is served at `/usage` on the health
+server. It binds to `127.0.0.1` only and Docker Compose publishes no ports, so
+it is never reachable from the network. To view it from the host, open a local
+tunnel into the container (for example
+`docker run --rm -it --network container:free-classrooms-bot-unitn-free-classrooms-bot-1 alpine/socat tcp-listen:8081,fork,reuseaddr tcp:127.0.0.1:8080`
+and browse `http://127.0.0.1:8081/usage`) or run the binary locally against
+the same MongoDB instance.
+
+For each user it shows a pseudonymous internal ID (Telegram IDs are never
+stored there), total interactions, first/last usage, a usage-frequency
+classification (frequent / occasional / rare), the last 14 days of activity,
+and the chats the user interacted from.
 
 ## Author
 

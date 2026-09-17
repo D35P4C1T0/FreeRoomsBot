@@ -52,7 +52,7 @@ func NewApp(ctx context.Context, cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := NewDatabaseService(ctx, cfg.Database.ConnectionString, time.Duration(cfg.Database.LogRetentionDays)*24*time.Hour)
+	db, err := NewDatabaseService(ctx, cfg.Database.ConnectionString, time.Duration(cfg.Database.LogRetentionDays)*24*time.Hour, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,18 @@ func (a *App) Run(ctx context.Context) error {
 	case <-done:
 		return nil
 	}
+}
+
+// Database exposes the persistence service for local-only tooling such as the
+// usage viewer.
+func (a *App) Database() *DatabaseService {
+	return a.db
+}
+
+// NewUsageViewer returns the localhost-only, read-only usage viewer handler
+// backed by db.
+func NewUsageViewer(db *DatabaseService) http.Handler {
+	return newUsageViewerHandler(db)
 }
 
 // Close releases resources owned by App.
@@ -188,12 +200,18 @@ func (a *App) RegisterHandlers(ctx context.Context) {
 		if err := a.logMessageChat(ctx, c); err != nil {
 			return err
 		}
+		if message := c.Message(); message != nil {
+			a.recordUsageInteraction(ctx, message.Sender, message.Chat)
+		}
 		return a.HandleTextMessage(ctx, c.Message())
 	})
 
 	a.bot.Handle(tele.OnAddedToGroup, func(c tele.Context) error {
 		if err := a.logMessageChat(ctx, c); err != nil {
 			return err
+		}
+		if message := c.Message(); message != nil {
+			a.recordUsageInteraction(ctx, message.Sender, message.Chat)
 		}
 		return a.HandleAddedToGroup(c.Message())
 	})
@@ -202,6 +220,9 @@ func (a *App) RegisterHandlers(ctx context.Context) {
 		callback := c.Callback()
 		if err := a.db.LogUser(ctx, callback.Sender); err != nil {
 			a.logger.Warn("log user failed", "error", err)
+		}
+		if callback.Message != nil {
+			a.recordUsageInteraction(ctx, callback.Sender, callback.Message.Chat)
 		}
 		return a.HandleCallbackQuery(ctx, callback)
 	})
@@ -259,6 +280,29 @@ func (a *App) registerLogOnlyMessageHandlers(ctx context.Context) {
 		a.bot.Handle(endpoint, func(c tele.Context) error {
 			return a.logMessageChat(ctx, c)
 		})
+	}
+}
+
+// recordUsageInteraction records a usage interaction attributed to the user
+// when their identity is known, otherwise to the chat itself. The originating
+// chat is always recorded as an associated room for the user.
+func (a *App) recordUsageInteraction(ctx context.Context, user *tele.User, chat *tele.Chat) {
+	if chat == nil {
+		return
+	}
+	chatInfo := usageChatForMessage(chat)
+	if user != nil && user.ID != 0 {
+		a.recordInteraction(ctx, UsageChat{ID: user.ID, Type: "Private"}, chatInfo)
+		return
+	}
+	a.recordInteraction(ctx, chatInfo)
+}
+
+// recordInteraction logs a usage interaction, ignoring failures so usage
+// tracking never blocks a user-facing response.
+func (a *App) recordInteraction(ctx context.Context, primary UsageChat, extras ...UsageChat) {
+	if err := a.db.RecordInteraction(ctx, primary, extras...); err != nil {
+		a.logger.Warn("record interaction failed", "error", err)
 	}
 }
 

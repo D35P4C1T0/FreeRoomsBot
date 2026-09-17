@@ -36,7 +36,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := bot.StartHealthServer(ctx, cfg.Health.Port, bot.NewLogger(cfg)); err != nil {
+	if _, err := bot.StartHealthServer(ctx, cfg.Health.Port, bot.NewLogger(cfg), bot.NewUsageViewer(app.Database())); err != nil {
 		log.Fatal(err)
 	}
 	defer func() {

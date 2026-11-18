@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"bytes"
@@ -9,11 +9,11 @@ import (
 )
 
 func TestNewLoggerHonorsDefaultLevel(t *testing.T) {
-	cfg := Config{}
+	cfg := config{}
 	cfg.Logging.LogLevel = map[string]string{"Default": "Warning"}
 
 	var buf bytes.Buffer
-	logger := NewLoggerWithWriter(cfg, &buf)
+	logger := newLoggerWithWriter(cfg, &buf)
 	logger.Debug("hidden")
 	logger.Warn("shown")
 

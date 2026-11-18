@@ -1,4 +1,4 @@
-package bot
+package rooms
 
 import (
 	"context"
@@ -128,13 +128,13 @@ func TestLoadRoomsPostsEasyRoomFormAndParsesRooms(t *testing.T) {
 		}),
 	}
 
-	service := &RoomsService{
+	service := &Client{
 		client:   client,
 		loc:      loc,
 		endpoint: "https://example.invalid/rooms_call.php",
 	}
 
-	rooms, err := service.LoadRooms(context.Background(), &Department{ID: "E0503", Slug: "povo"})
+	rooms, err := service.Load(context.Background(), &Department{ID: "E0503", Slug: "povo"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestLoadRoomsRejectsOversizedEasyRoomResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := &RoomsService{
+	service := &Client{
 		client: &http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				return &http.Response{
@@ -172,9 +172,9 @@ func TestLoadRoomsRejectsOversizedEasyRoomResponse(t *testing.T) {
 		endpoint: "https://example.invalid/rooms_call.php",
 	}
 
-	_, err = service.LoadRooms(context.Background(), &Department{ID: "E0503", Slug: "povo"})
+	_, err = service.Load(context.Background(), &Department{ID: "E0503", Slug: "povo"})
 	if err == nil {
-		t.Fatal("LoadRooms succeeded with oversized response")
+		t.Fatal("Load succeeded with oversized response")
 	}
 	if !strings.Contains(err.Error(), "exceeded") {
 		t.Fatalf("error = %q, want exceeded response error", err)
@@ -188,7 +188,7 @@ func TestLoadRoomsUsesProvidedDateForFormAndLectures(t *testing.T) {
 	}
 
 	requestDate := time.Date(2026, 6, 3, 23, 59, 0, 0, loc)
-	service := &RoomsService{
+	service := &Client{
 		client: &http.Client{
 			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if err := r.ParseForm(); err != nil {
@@ -244,16 +244,15 @@ func TestParseLecturesMapsMidnight24To2359(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &RoomsService{loc: loc}
+	service := &Client{loc: loc}
 	rooms := []*Room{{Key: "101", Name: "A101"}}
 	payload := easyRoomPayload{
 		Events: []struct {
-			Name       string `json:"name"`
 			From       string `json:"from"`
 			To         string `json:"to"`
 			CodiceAula string `json:"CodiceAula"`
 		}{
-			{Name: "Holiday", From: "00:00", To: "24:00", CodiceAula: "101"},
+			{From: "00:00", To: "24:00", CodiceAula: "101"},
 		},
 	}
 
@@ -272,16 +271,15 @@ func TestParseLecturesAcceptsEasyRoomClockWithSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &RoomsService{loc: loc}
+	service := &Client{loc: loc}
 	rooms := []*Room{{Key: "E0503/A101", Name: "A101"}}
 	payload := easyRoomPayload{
 		Events: []struct {
-			Name       string `json:"name"`
 			From       string `json:"from"`
 			To         string `json:"to"`
 			CodiceAula string `json:"CodiceAula"`
 		}{
-			{Name: "Lecture", From: "08:30:00", To: "10:30:00", CodiceAula: "E0503/A101"},
+			{From: "08:30:00", To: "10:30:00", CodiceAula: "E0503/A101"},
 		},
 	}
 

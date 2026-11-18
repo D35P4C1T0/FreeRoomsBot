@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"os"
@@ -37,7 +37,7 @@ func TestLoadConfigReadsAppsettingsAndEnvOverrides(t *testing.T) {
 	t.Setenv("Health__Port", "9090")
 	t.Setenv("Logging__LogLevel__Default", "Warning")
 
-	cfg, err := LoadConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestLoadConfigUsesAppsettingsPath(t *testing.T) {
 
 	t.Setenv("APPSETTINGS_PATH", configPath)
 
-	cfg, err := LoadConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,9 +105,9 @@ func TestLoadConfigRequiresBotToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = LoadConfig()
+	_, err = loadConfig()
 	if err == nil {
-		t.Fatal("LoadConfig succeeded without BotToken")
+		t.Fatal("loadConfig succeeded without BotToken")
 	}
 }
 
@@ -129,8 +129,21 @@ func TestLoadConfigRejectsInvalidHealthPort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = LoadConfig()
+	_, err = loadConfig()
 	if err == nil {
-		t.Fatal("LoadConfig succeeded with invalid health port")
+		t.Fatal("loadConfig succeeded with invalid health port")
+	}
+}
+
+func TestDefaultLogRetention(t *testing.T) {
+	t.Setenv("Bot__BotToken", "token")
+	t.Setenv("APPSETTINGS_PATH", t.TempDir()+"/missing.json")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.LogRetentionDays != 90 {
+		t.Fatalf("LogRetentionDays = %d, want 90", cfg.Database.LogRetentionDays)
 	}
 }

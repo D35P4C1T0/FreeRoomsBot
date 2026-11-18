@@ -21,15 +21,13 @@ services:
       - Bot__BotName=Free Classrooms Bot - UNITN
       - Health__Port=8080
       - Logging__LogLevel__Default=Warning
-      - Logging__LogLevel__Microsoft=Warning
-      - Logging__LogLevel__System.Net.Http.HttpClient=Warning
     logging: *log-rotation
     mem_limit: 512m
     cpus: '2'
 
   mongo:
     image: mongo:6.0
-    command: ["--quiet"]
+    command: ["--quiet", "--setParameter", "diagnosticDataCollectionEnabled=false"]
     restart: unless-stopped
     logging: *log-rotation
     volumes:

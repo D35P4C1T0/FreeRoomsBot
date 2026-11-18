@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"context"
@@ -10,14 +10,14 @@ import (
 	"time"
 )
 
-// StartHealthServer starts a localhost HTTP health endpoint.
+// startHealthServer starts a localhost HTTP health endpoint.
 //
 // The server responds with HTTP 200 on /healthz until ctx is canceled. When a
 // usage handler is supplied, it serves the read-only usage viewer at /usage.
 // It binds only to 127.0.0.1 because Docker runs the health-check command
 // inside the container network namespace, which also keeps the viewer off the
 // network.
-func StartHealthServer(ctx context.Context, port int, logger *slog.Logger, usageViewer http.Handler) (*http.Server, error) {
+func startHealthServer(ctx context.Context, port int, logger *slog.Logger, usageViewer http.Handler) error {
 	mux := http.NewServeMux()
 	if usageViewer != nil {
 		mux.Handle("/usage", usageViewer)
@@ -34,7 +34,7 @@ func StartHealthServer(ctx context.Context, port int, logger *slog.Logger, usage
 
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	go func() {
@@ -52,7 +52,7 @@ func StartHealthServer(ctx context.Context, port int, logger *slog.Logger, usage
 		}
 	}()
 
-	return server, nil
+	return nil
 }
 
 func newHealthHandler() http.Handler {
@@ -69,9 +69,9 @@ func newHealthHandler() http.Handler {
 	return mux
 }
 
-// CheckHealth performs the same localhost check used by the Docker
+// checkHealth performs the same localhost check used by the Docker
 // HEALTHCHECK command.
-func CheckHealth(ctx context.Context, port int) error {
+func checkHealth(ctx context.Context, port int) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), nil)
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"encoding/json"
@@ -7,9 +7,9 @@ import (
 	"strconv"
 )
 
-// Config contains runtime settings loaded from appsettings-style JSON and
+// config contains runtime settings loaded from appsettings-style JSON and
 // environment variable overrides.
-type Config struct {
+type config struct {
 	// Logging contains application log-level settings.
 	Logging struct {
 		// LogLevel maps category names to configured log levels.
@@ -26,7 +26,7 @@ type Config struct {
 	Database struct {
 		// ConnectionString is the MongoDB connection URI.
 		ConnectionString string `json:"ConnectionString"`
-		// LogRetentionDays controls automatic expiry of usage logs.
+		// LogRetentionDays controls automatic expiry of usage history.
 		LogRetentionDays int `json:"LogRetentionDays"`
 	} `json:"Database"`
 	// Health contains local health-check endpoint settings.
@@ -36,13 +36,13 @@ type Config struct {
 	} `json:"Health"`
 }
 
-// LoadConfig reads configuration from appsettings.json, or APPSETTINGS_PATH
+// loadConfig reads configuration from appsettings.json, or APPSETTINGS_PATH
 // when set, and applies supported environment variable overrides.
 //
 // A missing config file is allowed so deployments can rely entirely on
 // environment variables. Other file and JSON errors are returned.
-func LoadConfig() (Config, error) {
-	cfg := Config{}
+func loadConfig() (config, error) {
+	cfg := config{}
 	cfg.Bot.BotName = "Free Classrooms Bot - UNITN"
 	cfg.Database.ConnectionString = "mongodb://localhost:27017"
 	cfg.Database.LogRetentionDays = 90

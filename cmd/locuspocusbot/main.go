@@ -3,76 +3,79 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"free-classrooms-bot-unitn/internal/bot"
-
-	_ "time/tzdata"
+	"free-classrooms-bot-unitn/internal/rooms"
+	"free-classrooms-bot-unitn/internal/usage"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		if err := runHealthcheck(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	cfg, err := bot.LoadConfig()
-	if err != nil {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
+}
 
-	if len(os.Args) > 1 && os.Args[1] == "usage" {
-		query := ""
-		if len(os.Args) > 2 {
-			query = os.Args[2]
+func run() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "healthcheck":
+			return runHealthcheck(cfg.Health.Port)
+		case "usage":
+			query := ""
+			if len(os.Args) > 2 {
+				query = os.Args[2]
+			}
+			return usage.Export(context.Background(), cfg.Health.Port, query, os.Stdout)
 		}
-		if err := bot.ExportUsage(context.Background(), cfg.Health.Port, query, os.Stdout); err != nil {
-			log.Fatal(err)
-		}
-		return
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	app, err := bot.NewApp(ctx, cfg)
+	logger := newLogger(cfg)
+	roomClient, err := rooms.NewClient()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	if _, err := bot.StartHealthServer(ctx, cfg.Health.Port, bot.NewLogger(cfg), bot.NewUsageViewer(app.Database())); err != nil {
-		log.Fatal(err)
+	app, err := bot.New(cfg.Bot.BotToken, cfg.Bot.BotName, roomClient, logger)
+	if err != nil {
+		return err
+	}
+	retention := time.Duration(cfg.Database.LogRetentionDays) * 24 * time.Hour
+	store, err := usage.Open(ctx, cfg.Database.ConnectionString, retention)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := app.Close(closeCtx); err != nil {
+		if err := store.Close(closeCtx); err != nil {
 			log.Printf("database close failed: %v", err)
 		}
 	}()
-
-	if err := app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatal(err)
-	}
-}
-
-func runHealthcheck() error {
-	cfg, err := bot.LoadConfig()
-	if err != nil {
+	if err := startHealthServer(ctx, cfg.Health.Port, logger, store.Handler()); err != nil {
 		return err
 	}
+	app.Run(ctx, store.RecordInteraction)
+	return nil
+}
 
+func runHealthcheck(port int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	if err := bot.CheckHealth(ctx, cfg.Health.Port); err != nil {
+	if err := checkHealth(ctx, port); err != nil {
 		return fmt.Errorf("healthcheck failed: %w", err)
 	}
 	return nil

@@ -4,17 +4,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"free-classrooms-bot-unitn/internal/rooms"
 )
 
-func testDepartmentForRendering() *Department {
-	return &Department{
+func testDepartmentForRendering() *rooms.Department {
+	return &rooms.Department{
 		Name: "Povo",
 		Slug: "povo",
-		Rooms: []*Room{
+		Rooms: []*rooms.Room{
 			{
 				Name: "A101",
-				Lectures: []Lecture{
-					{Name: "busy", Start: romeTime(9, 0), End: romeTime(10, 0)},
+				Lectures: []rooms.Lecture{
+					{Start: romeTime(9, 0).UTC(), End: romeTime(10, 0).UTC()},
 				},
 			},
 			{
@@ -25,7 +27,7 @@ func testDepartmentForRendering() *Department {
 }
 
 func TestRenderRoomsMessageFree(t *testing.T) {
-	rendered := renderRoomsMessage(testDepartmentForRendering(), AvailabilityFree, romeTime(8, 30))
+	rendered := renderRoomsMessage(testDepartmentForRendering(), rooms.Free, romeTime(8, 30))
 
 	wantParts := []string{
 		"<strong>POVO - Aule libere alle 08:30</strong>",
@@ -44,7 +46,7 @@ func TestRenderRoomsMessageFree(t *testing.T) {
 }
 
 func TestRenderRoomsMessageOccupied(t *testing.T) {
-	rendered := renderRoomsMessage(testDepartmentForRendering(), AvailabilityOccupied, romeTime(9, 30))
+	rendered := renderRoomsMessage(testDepartmentForRendering(), rooms.Occupied, romeTime(9, 30))
 
 	wantParts := []string{
 		"<strong>POVO - Aule occupate alle 09:30</strong>",
@@ -62,7 +64,7 @@ func TestRenderRoomsMessageOccupied(t *testing.T) {
 }
 
 func TestRenderRoomsMessageAll(t *testing.T) {
-	rendered := renderRoomsMessage(testDepartmentForRendering(), AvailabilityAny, romeTime(11, 0))
+	rendered := renderRoomsMessage(testDepartmentForRendering(), rooms.All, romeTime(11, 0))
 
 	wantParts := []string{
 		"<strong>POVO - Situazione aule alle 11:00</strong>",
@@ -78,13 +80,6 @@ func TestRenderRoomsMessageAll(t *testing.T) {
 	assertButton(t, rendered, 0, 0, "Libere", "free;povo;now")
 	assertButton(t, rendered, 0, 1, "Occupate", "free;povo;future")
 	assertButton(t, rendered, 1, 0, "✅ Tutte le aule", "free;povo;all")
-}
-
-func TestPrettyLocalTimeUsesRomeTimezone(t *testing.T) {
-	utc := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	if got := prettyLocalTime(utc); got != "13:00" {
-		t.Fatalf("prettyLocalTime = %q, want 13:00", got)
-	}
 }
 
 func assertButton(t *testing.T, rendered renderedRoomsMessage, row, col int, text, data string) {

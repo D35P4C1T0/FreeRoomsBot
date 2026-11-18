@@ -1,4 +1,4 @@
-package bot
+package main
 
 import (
 	"io"
@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// NewLogger creates the process logger using stdout as the destination.
-func NewLogger(cfg Config) *slog.Logger {
-	return NewLoggerWithWriter(cfg, os.Stdout)
+// newLogger creates the process logger using stdout as the destination.
+func newLogger(cfg config) *slog.Logger {
+	return newLoggerWithWriter(cfg, os.Stdout)
 }
 
-// NewLoggerWithWriter creates a text slog logger using cfg's default log
+// newLoggerWithWriter creates a text slog logger using cfg's default log
 // level.
 //
 // Unknown log levels fall back to warning to keep production logging quiet by
 // default.
-func NewLoggerWithWriter(cfg Config, w io.Writer) *slog.Logger {
+func newLoggerWithWriter(cfg config, w io.Writer) *slog.Logger {
 	level := slog.LevelWarn
 	switch strings.ToLower(cfg.Logging.LogLevel["Default"]) {
 	case "trace", "debug":

@@ -1,14 +1,8 @@
-package bot
+package usage
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"fmt"
-	"html/template"
-	"io"
-	"net"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -19,10 +13,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-//go:embed usage.html
-var usageHTML string
-var usageTemplate = template.Must(template.New("usage").Parse(usageHTML))
-
 type usageSummary struct{ Users, Today, Week, Month, Interactions int64 }
 type usageBar struct {
 	Date   string
@@ -32,7 +22,7 @@ type usageBar struct {
 type usageRow struct {
 	ID, Frequency, First, Last, Relative string
 	Total                                int64
-	Chats                                []UsageChatRef
+	Chats                                []chatRef
 }
 type usagePage struct {
 	Summary                                usageSummary
@@ -104,20 +94,26 @@ func relativeUsageTime(last, now time.Time) string {
 
 // usageDashboard computes global totals independently of the filtered page.
 // Stream only required fields so summary memory does not grow with user count.
-func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now time.Time) (usagePage, error) {
+func (d *Store) usageDashboard(ctx context.Context, q usageQuery, now time.Time) (usagePage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	p := usagePage{Query: q.search, Sort: q.sort, Page: int(q.page), Generated: now.Format("2006-01-02 15:04 UTC")}
-	retained := bson.M{"LastSeen": bson.M{"$gt": now.Add(-d.retention)}}
-	cursor, err := d.usage.Find(ctx, retained, options.Find().SetProjection(bson.M{"LastSeen": 1, "TotalInteractions": 1, "Days": 1}))
+	cutoff := now.Add(-d.retention)
+	filter := bson.M{"LastSeen": bson.M{"$gt": cutoff}}
+	cursor, err := d.usage.Find(ctx, filter, options.Find().SetProjection(bson.M{"LastSeen": 1, "TotalInteractions": 1, "Days": 1}))
 	if err != nil {
 		return p, err
 	}
 	defer cursor.Close(ctx)
 	totals := map[string]int64{}
 	today := now.Truncate(24 * time.Hour)
+	oldestDay := today.AddDate(0, 0, -29)
+	if retentionDay := cutoff.Truncate(24 * time.Hour); retentionDay.After(oldestDay) {
+		oldestDay = retentionDay
+	}
+	firstDay, lastDay := oldestDay.Format(usageDayLayout), today.Format(usageDayLayout)
 	for cursor.Next(ctx) {
-		var u UsageEntity
+		var u userUsage
 		if err := cursor.Decode(&u); err != nil {
 			return p, err
 		}
@@ -133,7 +129,7 @@ func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now 
 			p.Summary.Month++
 		}
 		for day, count := range u.Days {
-			if day >= today.AddDate(0, 0, -29).Format(usageDayLayout) && day <= today.Format(usageDayLayout) {
+			if day >= firstDay && day <= lastDay {
 				totals[day] += count
 			}
 		}
@@ -156,7 +152,6 @@ func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now 
 		}
 		p.Bars = append(p.Bars, usageBar{day, count, height})
 	}
-	filter := bson.M{"LastSeen": retained["LastSeen"]}
 	if q.search != "" {
 		filter["_id"] = bson.M{"$regex": "^" + q.search}
 	}
@@ -166,7 +161,7 @@ func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now 
 		return p, err
 	}
 	defer rows.Close(ctx)
-	var users []UsageEntity
+	var users []userUsage
 	if err := rows.All(ctx, &users); err != nil {
 		return p, err
 	}
@@ -182,9 +177,16 @@ func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now 
 		users = users[:50]
 	}
 	for _, u := range users {
+		for day := range u.Days {
+			if day < firstDay || day > lastDay {
+				delete(u.Days, day)
+			}
+		}
 		row := usageRow{ID: u.ID, Total: u.TotalInteractions, Frequency: recentFrequency(u.Days, now), First: u.FirstSeen.UTC().Format("2006-01-02"), Last: u.LastSeen.UTC().Format("2006-01-02 15:04:05 UTC"), Relative: relativeUsageTime(u.LastSeen, now)}
 		for _, chat := range u.Chats {
-			row.Chats = append(row.Chats, chat)
+			if !chat.LastAt.Before(cutoff) {
+				row.Chats = append(row.Chats, chat)
+			}
 		}
 		sort.Slice(row.Chats, func(i, j int) bool {
 			a, b := row.Chats[i], row.Chats[j]
@@ -199,79 +201,4 @@ func (d *DatabaseService) usageDashboard(ctx context.Context, q usageQuery, now 
 		p.Rows = append(p.Rows, row)
 	}
 	return p, nil
-}
-
-func newUsageViewerHandler(db *DatabaseService) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		// Reject non-loopback clients and rebinding hosts, even behind a proxy.
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-		peer, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || !net.ParseIP(peer).IsLoopback() || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		if r.URL.Path != "/usage" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", 405)
-			return
-		}
-		q, err := parseUsageQuery(r.URL.Query())
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		p, err := db.usageDashboard(r.Context(), q, time.Now().UTC())
-		if err != nil {
-			http.Error(w, "usage query failed", 500)
-			return
-		}
-		var body bytes.Buffer
-		if err := usageTemplate.Execute(&body, p); err != nil {
-			http.Error(w, "usage render failed", 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if r.Method == http.MethodGet {
-			_, _ = w.Write(body.Bytes())
-		}
-	})
-}
-
-// ExportUsage reads the container-local dashboard without opening a listener.
-func ExportUsage(ctx context.Context, port int, query string, out io.Writer) error {
-	values, err := url.ParseQuery(query)
-	if err != nil {
-		return err
-	}
-	if _, err := parseUsageQuery(values); err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/usage?%s", port, values.Encode()), nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer client.CloseIdleConnections()
-	response, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		return fmt.Errorf("usage endpoint returned %s", response.Status)
-	}
-	_, err = io.Copy(out, response.Body)
-	return err
 }
